@@ -1,5 +1,7 @@
 # workbuddy-ai-linux
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 Build the **WorkBuddy AI international edition** (`workbuddy.ai`) as a native
 Debian package, from the official macOS DMG, on your own machine.
 
@@ -8,7 +10,7 @@ Electron 37.10.3). The user confirmed the Linux desktop app opens with the
 existing session and can start AI conversations. A fresh Google OAuth round
 trip for 5.8.4 has not been independently tested.
 
-[![仓库卫生守卫](https://github.com/No1Hoo/workbuddy-ai-linux/actions/workflows/guard.yml/badge.svg)](https://github.com/No1Hoo/workbuddy-ai-linux/actions/workflows/guard.yml)
+[![仓库卫生守卫](https://github.com/JackWesleyy/workbuddy-ai-linux/actions/workflows/guard.yml/badge.svg)](https://github.com/JackWesleyy/workbuddy-ai-linux/actions/workflows/guard.yml)
 
 > **Unofficial community project.** Not affiliated with, endorsed by, or
 > supported by Tencent. Read [`DISCLAIMER.md`](DISCLAIMER.md) before you start —
@@ -144,7 +146,7 @@ Shipped as [`patches/deb-tool.patch`](patches/deb-tool.patch):
 ## Quick start
 
 ```bash
-git clone https://github.com/No1Hoo/workbuddy-ai-linux.git
+git clone https://github.com/JackWesleyy/workbuddy-ai-linux.git
 cd workbuddy-ai-linux
 
 # 1. fetch the two upstream toolchains at pinned commits + apply patches
@@ -280,8 +282,10 @@ More detail in [`docs/env-traps.md`](docs/env-traps.md).
 
 ## Credits
 
-Standing on two MIT-licensed projects, consumed at pinned commits and never
-vendored:
+Thanks to **No1Hoo** for creating the original `workbuddy-ai-linux` project
+and sharing the initial Linux porting work. This repository builds on that
+work and on two MIT-licensed upstream projects, consumed at pinned commits and
+never vendored:
 
 - **[LX2000WASD/workbuddy-international-linux](https://github.com/LX2000WASD/workbuddy-international-linux)**
   — DMG → Linux conversion. The hard part. Copyright (c) 2026
