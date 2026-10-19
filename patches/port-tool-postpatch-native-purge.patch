@@ -1,0 +1,64 @@
+diff --git a/install.sh b/install.sh
+--- a/install.sh
++++ b/install.sh
+@@ -264,7 +264,12 @@ main() {
+     # Apply Linux-specific runtime patches inside app.asar so the main
+     # window actually opens and the tray right-click menu is populated.
+     apply_linux_runtime_patches "$INSTALL_DIR"
++
++    # Repacking the ASAR can materialize packed Windows/macOS prebuilds into
++    # app.asar.unpacked. Run the foreign-binary audit once more on the final
++    # app tree so those assets cannot leak into the Linux output.
++    purge_remaining_foreign_binaries "$INSTALL_DIR"
+ 
+     write_icon "$app_bundle"
+     write_launcher
+     write_desktop_entry
+diff --git a/lib-native-modules.sh b/lib-native-modules.sh
+index effddea..0872bac 100644
+--- a/lib-native-modules.sh
++++ b/lib-native-modules.sh
+@@ -112,10 +112,34 @@ purge_remaining_foreign_binaries() {
+         return 0
+     }
+ 
++    # Apple DMG extraction may materialize code-signing resource forks as
++    # ordinary files named :com.apple.*. They are metadata, not Linux assets.
++    local metadata_count empty_module_count
++    metadata_count="$(find "$app_dir" -type f -name '*:com.apple.*' -print | wc -l)"
++    find "$app_dir" -type f -name '*:com.apple.*' -delete
++    if [ "$metadata_count" -gt 0 ]; then
++        info "  Removed $metadata_count macOS code-signing metadata files"
++    fi
++
++    # Zero-byte .node files are unpacking placeholders and cannot be loaded by
++    # Node.js. Remove them so dormant foreign-platform stubs do not ship.
++    empty_module_count="$(find "$app_dir" -type f -name '*.node' -size 0 -print | wc -l)"
++    find "$app_dir" -type f -name '*.node' -size 0 -delete
++    if [ "$empty_module_count" -gt 0 ]; then
++        info "  Removed $empty_module_count empty native-module placeholders"
++    fi
++
+     local removed=0
+     while IFS= read -r native_file; do
+         description="$(file "$native_file" 2>/dev/null || true)"
+         case "$description" in
++            *"ELF 64-bit LSB shared object, ARM aarch64"*)
++                if [ "$ARCH" = "x86_64" ]; then
++                    warn "  Removing AArch64 native module from x86_64 build: $native_file"
++                    rm -f "$native_file"
++                    ((removed++)) || true
++                fi
++                ;;
+             *Mach-O*)
+                 warn "  Removing Mach-O binary: $native_file"
+                 rm -f "$native_file"
+@@ -140,7 +164,7 @@ purge_remaining_foreign_binaries() {
+                 ((removed++)) || true
+                 ;;
+         esac
+-    done < <(find "$app_dir/cli/vendor" -type f 2>/dev/null | sort || true)
++    done < <(find "$app_dir" -type f -perm /111 2>/dev/null | sort || true)
+ 
+     if [ "$removed" -gt 0 ]; then
+         info "  Removed $removed remaining non-Linux binaries"

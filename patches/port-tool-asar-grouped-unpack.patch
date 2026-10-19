@@ -1,0 +1,144 @@
+diff --git a/lib-apply-linux-patches.js b/lib-apply-linux-patches.js
+index c567b9c..c0ed347 100644
+--- a/lib-apply-linux-patches.js
++++ b/lib-apply-linux-patches.js
+@@ -741,13 +741,6 @@ for (const d of extraUnpackDirs) {
+ }
+ log('Fully-unpacked top directories: ' + fullyUnpackedDirs.length);
+ 
+-// Compose the asar `unpackDir` glob. It is matched against directory
+-// entries, so "cli" matches the cli/ tree recursively. Brace-list of
+-// ~10 paths is fast.
+-const unpackDirPattern = '{' + fullyUnpackedDirs.map(d =>
+-    d.replace(/[{}(),*?[\]!|+@\\]/g, ch => '\\' + ch)
+-).join(',') + '}';
+-
+ // Also compute any individual unpacked files that live in partially-packed
+ // directories (e.g. a single file under node_modules/foo/ where only that
+ // one file is unpacked). Collect them and use an explicit --unpack glob.
+@@ -771,12 +764,42 @@ function findPartialFiles(node, relPath) {
+     }
+ }
+ findPartialFiles(header, '');
+-log('Partially-unpacked individual files: ' + partialUnpackedFiles.length);
+ 
+-const unpackPattern = partialUnpackedFiles.length
+-    ? '{' + partialUnpackedFiles.map(p =>
+-        p.replace(/[{}(),*?[\]!|+@\\]/g, ch => '\\' + ch)
+-    ).join(',') + '}'
++// New WorkBuddy releases put thousands of partial assets directly under
++// renderer/assets. An explicit brace list exceeds minimatch's 64 KiB limit.
++// Replace a dense direct-child list with a directory wildcard instead. The
++// generated sidecar is merged below so additional direct children stay present.
++const partialByParent = new Map();
++for (const file of partialUnpackedFiles) {
++    const parent = path.posix.dirname(file);
++    if (!partialByParent.has(parent)) partialByParent.set(parent, []);
++    partialByParent.get(parent).push(file);
++}
++const bulkPartialDirs = [];
++for (const [parent, files] of partialByParent) {
++    if (parent !== '.' && files.length >= 128 && files.every(file => path.posix.dirname(file) === parent)) {
++        bulkPartialDirs.push(parent);
++    }
++}
++const retainedPartialFiles = partialUnpackedFiles.filter(file =>
++    !bulkPartialDirs.some(dir => path.posix.dirname(file) === dir)
++);
++log('Partially-unpacked files: ' + partialUnpackedFiles.length +
++    ' (' + retainedPartialFiles.length + ' exact, ' + bulkPartialDirs.length + ' parent globs)');
++
++const escapeGlob = value => value.replace(/[{}(),*?[\]!|+@\\]/g, ch => '\\' + ch);
++
++// unpackDir is matched against paths relative to tmpDir. The ASAR library's
++// `unpack` matcher receives the absolute filename, so anchor exact paths and
++// compact parent globs at tmpDir (relative patterns silently match nothing in
++// current @electron/asar releases).
++const unpackDirPattern = '{' + fullyUnpackedDirs.map(escapeGlob).join(',') + '}';
++const unpackTerms = [
++    ...bulkPartialDirs.map(dir => escapeGlob(dir) + '/*'),
++    ...retainedPartialFiles.map(escapeGlob),
++];
++const unpackPattern = unpackTerms.length
++    ? escapeGlob(tmpDir) + '/{' + unpackTerms.join(',') + '}'
+     : undefined;
+ 
+ // ---------------------------------------------------------------------------
+@@ -803,23 +826,66 @@ const unpackPattern = partialUnpackedFiles.length
+     });
+     log('wrote ' + path.basename(outPath) + ' (' + fs.statSync(outPath).size + ' bytes)');
+ 
+-    // Atomically replace app.asar only. Leave app.asar.unpacked alone.
+-    fs.renameSync(asarPath, asarPath + '.prepatch');
++    // The newly created sidecar contains every path marked unpacked in the
++    // new header. Carry forward Linux binaries and other files that the build
++    // pipeline added beside the ASAR but that are not represented in its
++    // source header. Do not overwrite files just regenerated from that source.
++    if (fs.existsSync(stagingSidecar) && fs.existsSync(unpackedSiblingDir)) {
++        function copyMissing(source, destination) {
++            const sourceStat = fs.lstatSync(source);
++            let destinationStat;
++            try { destinationStat = fs.lstatSync(destination); } catch (_) {}
++
++            if (sourceStat.isDirectory() && !sourceStat.isSymbolicLink()) {
++                if (destinationStat && (!destinationStat.isDirectory() || destinationStat.isSymbolicLink())) return;
++                if (!destinationStat) fs.mkdirSync(destination, { recursive: true, mode: sourceStat.mode & 0o777 });
++                for (const name of fs.readdirSync(source)) {
++                    copyMissing(path.join(source, name), path.join(destination, name));
++                }
++                return;
++            }
++
++            if (destinationStat) return;
++            fs.mkdirSync(path.dirname(destination), { recursive: true });
++            if (sourceStat.isSymbolicLink()) {
++                fs.symlinkSync(fs.readlinkSync(source), destination);
++            } else {
++                fs.copyFileSync(source, destination);
++                fs.chmodSync(destination, sourceStat.mode & 0o7777);
++                try { fs.utimesSync(destination, sourceStat.atime, sourceStat.mtime); } catch (_) {}
++            }
++        }
++        copyMissing(unpackedSiblingDir, stagingSidecar);
++        log('merged additional files from existing app.asar.unpacked');
++    }
++
++    // Atomically replace the archive and its sidecar together. Both backups
++    // are restored if either rename fails.
++    const asarBackup = asarPath + '.prepatch';
++    const sidecarBackup = unpackedSiblingDir + '.prepatch';
++    const replaceSidecar = fs.existsSync(stagingSidecar);
++    const hadSidecar = fs.existsSync(unpackedSiblingDir);
++    fs.renameSync(asarPath, asarBackup);
++    if (replaceSidecar && hadSidecar) fs.renameSync(unpackedSiblingDir, sidecarBackup);
+     try {
+         fs.renameSync(outPath, asarPath);
++        if (replaceSidecar) fs.renameSync(stagingSidecar, unpackedSiblingDir);
+     } catch (err) {
+-        // Roll back on failure.
+-        try { fs.renameSync(asarPath + '.prepatch', asarPath); } catch (_) {}
++        // Roll back both files on failure.
++        try { fs.rmSync(asarPath, { force: true }); } catch (_) {}
++        try { fs.renameSync(asarBackup, asarPath); } catch (_) {}
++        if (replaceSidecar && hadSidecar) {
++            try { fs.rmSync(unpackedSiblingDir, { recursive: true, force: true }); } catch (_) {}
++            try { fs.renameSync(sidecarBackup, unpackedSiblingDir); } catch (_) {}
++        }
+         throw err;
+     }
+-    try { fs.rmSync(asarPath + '.prepatch'); } catch (_) {}
+-
+-    // Discard the repack's sidecar directory; the on-disk one is already
+-    // correct and contains additional files (rebuilt native modules,
+-    // Linux binaries) that the staging dir does not have.
+-    try { fs.rmSync(stagingSidecar, { recursive: true, force: true }); } catch (_) {}
++    try { fs.rmSync(asarBackup, { force: true }); } catch (_) {}
++    if (replaceSidecar && hadSidecar) {
++        try { fs.rmSync(sidecarBackup, { recursive: true, force: true }); } catch (_) {}
++    }
+ 
+-    log('replaced app.asar in place (app.asar.unpacked left untouched)');
++    log('replaced app.asar and merged its unpacked sidecar');
+ })().catch(err => {
+     console.error('[apply-linux-patches] pack failed:', err);
+     process.exit(6);

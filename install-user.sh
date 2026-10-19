@@ -14,7 +14,8 @@
 #   PREFIX=/some/where ./install-user.sh
 #   ./install-user.sh --uninstall     remove (user data is kept)
 #
-# Source of the application tree, first match wins:
+# Set APP_SOURCE to select a specific build tree. Without it, the existing
+# source of the application tree, first match wins:
 #   upstream/deb-tool/dist/deb-root/opt/workbuddy-ai   (after a full build)
 #   app/                                               (after --app-only)
 # ---------------------------------------------------------------------------
@@ -26,7 +27,8 @@ PREFIX="${PREFIX:-$HOME/.local}"
 PKG_NAME="workbuddy-ai"
 DESKTOP_ID="$PKG_NAME.desktop"
 
-APP_DST="$PREFIX/opt/$PKG_NAME"
+APP_DIR_NAME="${APP_DIR_NAME:-$PKG_NAME}"
+APP_DST="$PREFIX/opt/$APP_DIR_NAME"
 BIN_DST="$PREFIX/bin/$PKG_NAME"
 DESKTOP_DIR="$PREFIX/share/applications"
 DESKTOP_DST="$DESKTOP_DIR/$DESKTOP_ID"
@@ -36,6 +38,10 @@ MIME_PKG_DIR="$PREFIX/share/mime/packages"
 log()  { printf '\033[32m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+
+case "$APP_DIR_NAME" in
+    ''|.|..|*[!A-Za-z0-9._+-]*) die "APP_DIR_NAME must be a single safe directory name" ;;
+esac
 
 # --------------------------------------------------------------- uninstall ---
 if [ "${1:-}" = "--uninstall" ]; then
@@ -53,13 +59,17 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 # ------------------------------------------------------------- locate source -
-SRC_APP=""
-for candidate in \
-    "$HERE/upstream/deb-tool/dist/deb-root/opt/$PKG_NAME" \
-    "$HERE/app"
-do
-    if [ -x "$candidate/start.sh" ]; then SRC_APP="$candidate"; break; fi
-done
+SRC_APP="${APP_SOURCE:-}"
+if [ -n "$SRC_APP" ]; then
+    [ -x "$SRC_APP/start.sh" ] || die "APP_SOURCE=$SRC_APP has no executable start.sh"
+else
+    for candidate in \
+        "$HERE/upstream/deb-tool/dist/deb-root/opt/$PKG_NAME" \
+        "$HERE/app"
+    do
+        if [ -x "$candidate/start.sh" ]; then SRC_APP="$candidate"; break; fi
+    done
+fi
 [ -n "$SRC_APP" ] || die "no application tree found.
   Looked for:
     $HERE/upstream/deb-tool/dist/deb-root/opt/$PKG_NAME
@@ -85,7 +95,7 @@ cat > "$BIN_DST" <<EOF
 #!/usr/bin/env bash
 # WorkBuddy AI launcher (per-user install, generated $(date -Iseconds))
 set -euo pipefail
-APP_DIR="$PREFIX/opt/$PKG_NAME"
+APP_DIR="$APP_DST"
 [ -x "\$APP_DIR/start.sh" ] || { echo "WorkBuddy AI is not installed correctly: \$APP_DIR/start.sh missing" >&2; exit 1; }
 # Some IDEs and agent runtimes export ELECTRON_RUN_AS_NODE=1, which turns the
 # Electron binary into plain Node and breaks the launch. Clear it.
@@ -160,15 +170,8 @@ if command -v update-desktop-database >/dev/null 2>&1; then
         || warn "update-desktop-database failed (not fatal)"
 fi
 
-# workbuddy-ai : product.json deepLinkSchemes — the OAuth redirect_uri base
-# workbuddy    : hard-coded inside the bundle for internal deep links
-if command -v xdg-mime >/dev/null 2>&1; then
-    for S in "$PKG_NAME" workbuddy; do
-        xdg-mime default "$DESKTOP_ID" "x-scheme-handler/$S" 2>/dev/null || \
-            warn "xdg-mime registration for '$S' failed; run manually:
-         xdg-mime default $DESKTOP_ID x-scheme-handler/$S"
-    done
-fi
+# URI defaults are user preferences. Keep registering the MIME types above,
+# but do not replace the user's current handler selection here.
 
 # ------------------------------------------------------------ 6. self-check --
 log "6/6 self-check"

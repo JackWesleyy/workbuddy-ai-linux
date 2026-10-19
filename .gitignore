@@ -48,6 +48,7 @@ electron
 /logs/
 /.npmcache/
 /.apphome/
+/artifacts/
 *.log
 
 # Screenshots captured during verification runs

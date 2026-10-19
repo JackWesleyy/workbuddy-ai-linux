@@ -1,9 +1,12 @@
 # workbuddy-ai-linux
 
 Build the **WorkBuddy AI international edition** (`workbuddy.ai`) as a native
-Ubuntu package, from the official macOS DMG, on your own machine.
+Debian package, from the official macOS DMG, on your own machine.
 
-Rootless install supported. Login verified end to end.
+Latest candidate: WorkBuddy AI International 5.8.4.41366630 (macOS x64 DMG,
+Electron 37.10.3). The user confirmed the Linux desktop app opens with the
+existing session and can start AI conversations. A fresh Google OAuth round
+trip for 5.8.4 has not been independently tested.
 
 [![仓库卫生守卫](https://github.com/No1Hoo/workbuddy-ai-linux/actions/workflows/guard.yml/badge.svg)](https://github.com/No1Hoo/workbuddy-ai-linux/actions/workflows/guard.yml)
 
@@ -21,8 +24,11 @@ needed to make an Ubuntu install actually usable — most importantly a login
 callback that works.
 
 It is *not* another port project. It does not vendor the DMG, the converted
-application, or any packaged output. `./build.sh` downloads the official DMG
-from Tencent's servers, converts it locally, and produces a `.deb` on your disk.
+application, or any packaged output. `./build.sh` downloads the stable release;
+`./build-latest-candidate.sh` builds the versioned 5.8.4 candidate. Both convert
+the official DMG locally and produce a `.deb` on your disk.
+The versioned `build-latest-candidate.sh` applies the release-specific path and
+checksum isolation used for the 5.8.4 candidate.
 
 ### How it relates to the existing projects
 
@@ -34,7 +40,7 @@ from Tencent's servers, converts it locally, and produces a `.deb` on your disk.
         ┌─────────────────────────────┴──────────────────────────┐
         │  port-tool    LX2000WASD/workbuddy-international-linux │
         │  MIT · DMG → Linux app tree · Arch-only upstream       │
-        │  consumed UNMODIFIED at a pinned commit                │
+        │  pinned commit + tracked Linux compatibility patches   │
         └─────────────────────────────┬──────────────────────────┘
                                       │
         ┌─────────────────────────────┴──────────────────────────┐
@@ -53,11 +59,11 @@ from Tencent's servers, converts it locally, and produces a `.deb` on your disk.
 | | [`LX2000WASD`][p1] | [`Xboxpig`][p2] | [`JipZeonGit`][p3] | **this repo** |
 |---|---|---|---|---|
 | Edition | international | international | domestic | **international** |
-| Version | 5.5.2 | 5.3.11 | 4.22.10 (archived) | **5.5.2** |
+| Version | 5.5.2 | 5.3.11 | 4.22.10 (archived) | **5.8.4 candidate** (stable `build.sh` base remains 5.5.2) |
 | `.deb` output | ✗ (Arch only) | ✓ | ✓ | **✓** |
 | Rootless install | ✗ | ✗ | ✗ | **✓** |
-| Login callback fixed | ✗ | ✗ | ✗ | **✓** |
-| Real-desktop verification | ✗ | ✗ | ✗ | **✓** |
+| Login callback fixed | ✗ | ✗ | ✗ | **Implemented; fresh 5.8.4 OAuth not verified** |
+| Real-desktop verification | ✗ | ✗ | ✗ | **5.8.4 app launch and chat user-confirmed** |
 
 [p1]: https://github.com/LX2000WASD/workbuddy-international-linux
 [p2]: https://github.com/Xboxpig/workbuddy-desktop-linux
@@ -88,24 +94,28 @@ there is no error anywhere. This is the single hardest bug in the port.
 
 → [`docs/uri-scheme-bug.md`](docs/uri-scheme-bug.md)
 
+The URI handler registration is implemented in this repository. The 5.5.2
+baseline had a completed browser callback check; fresh OAuth for the 5.8.4
+candidate still needs independent verification.
+
 ### 2. Rootless install (`install-user.sh`)
 
 Installs into `~/.local` — no `sudo`, no `/opt`, no `dpkg` database. Every
-upstream project requires root or `makepkg`. Useful on locked-down machines,
-and it is what made automated end-to-end verification possible here.
+upstream project requires root or `makepkg`. Useful on locked-down machines
+and for testing a candidate without registering a system package.
 
 ### 3. Reproducible, checksum-verified build
 
-`build.sh` pins the version, the build id, the Electron version, the DMG
-sha256 and the Electron zip sha256. A mismatch aborts instead of quietly
-packaging something unexpected. Upstream commits are pinned too, so a
-force-push cannot change what you build.
+`build.sh` remains the stable 5.5.2 driver. `build-latest-candidate.sh` builds
+the 5.8.4 candidate with release-scoped paths and checksums for the DMG,
+Electron runtime and Koffi module. Upstream commits are pinned too, so a
+force-push cannot change the conversion and packaging tools.
 
 ### 4. Real-desktop verification (`verify-real-desktop.sh`)
 
-Launches the app on your actual X session and captures evidence. Used here to
-confirm the international login screen renders and that a Google sign-in
-completes.
+Launches the app on your actual desktop session and captures evidence. The
+current 5.8.4 app launch and chat were confirmed by the user; a new Google
+OAuth round trip was not performed because the existing session remained valid.
 
 ### Plus packaging corrections
 
@@ -122,9 +132,11 @@ Shipped as [`patches/deb-tool.patch`](patches/deb-tool.patch):
 
 ## Requirements
 
-- Ubuntu 22.04 / 24.04 (or any Debian derivative with the same libs)
+- Kali Rolling with glibc 2.42 or later for this 5.8.4 candidate. Its native
+  modules require `GLIBC_2.42`; Ubuntu 22.04/24.04 do not meet that requirement.
 - ~4 GB free disk space (the converted app tree is ~1 GB, the `.deb` ~290 MB)
-- `curl`, `git`, `patch`, `dpkg-deb`, `fakeroot`, `node` **20+**, `python3`
+- `curl`, `git`, `patch`, `file`, `openssl`, `tar`, `rsync`, `dpkg-deb`,
+  `fakeroot`, `node` **20+** with npm, and `python3`
 - Runtime libraries the `.deb` declares; `sudo apt-get -f install` resolves them
 
 ---
@@ -138,19 +150,21 @@ cd workbuddy-ai-linux
 # 1. fetch the two upstream toolchains at pinned commits + apply patches
 ./bootstrap.sh
 
-# 2. download the official DMG, convert, and build the .deb
-./build.sh
+# 2. download the official international x64 DMG, convert, and build the .deb
+./build-latest-candidate.sh
 
 # 3. install — rootless (recommended) …
-./install-user.sh
+APP_SOURCE="$PWD/artifacts/build/5.8.4.41366630-73952edb/app" ./install-user.sh
 
 #    … or system-wide
-sudo dpkg -i upstream/deb-tool/dist/workbuddy-ai_5.5.2.37849279_amd64.deb
+sudo dpkg -i artifacts/packages/workbuddy-ai_5.8.4.41366630_amd64.deb
 sudo apt-get -f install
 ```
 
 Then launch **WorkBuddy AI** from your application menu, or run
-`workbuddy-ai` in a terminal, and sign in.
+`workbuddy-ai` in a terminal. A fresh login requires a working desktop browser
+and URI callback; see [`docs/PORTING-WORKFLOW.md`](docs/PORTING-WORKFLOW.md)
+for the current verification status.
 
 > If you launch from a terminal and see odd Electron flags being misparsed
 > (`bad option: --no-sandbox`), some parent process exported
@@ -175,25 +189,19 @@ separate from the domestic client's `~/.workbuddy/`, so both can coexist.
 
 ---
 
-## Upgrading to a newer release
+## Building a newer release
 
 ```bash
-# find the current version + build id published by the official feed
-curl 'https://www.workbuddy.ai/v2/update?platform=workbuddy-darwin-x64'
+# Read current release metadata for the official international x64 DMG
+./tools/workbuddy_intl_release_probe.py --channel mac-x64
 
-# rebuild against it
-PKG_VERSION=<new-version> BUILD_ID=<new-build-id> ./build.sh
+# Inspect the options before generating a new candidate script
+./tools/workbuddy_prepare_new_port.py --help
 ```
 
-Then update `DMG_SHA256` in `build.sh` so future builds stay verified:
-
-```bash
-sha256sum ~/.cache/wb-ai-linux/wb.dmg
-```
-
-If the new release bundles a different Electron major, set
-`ELECTRON_VERSION` and its `ELECTRON_ZIP_SHA256` too — check
-`CFBundleVersion` in the DMG's `Info.plist`.
+See [`docs/PORTING-WORKFLOW.md`](docs/PORTING-WORKFLOW.md) for DMG inspection,
+Electron version confirmation, checksum pinning, isolated build outputs,
+validation, safe user-level installation and repository hygiene checks.
 
 ---
 
@@ -202,12 +210,21 @@ If the new release bundles a different Electron major, set
 ```
 workbuddy-ai-linux/
 ├── bootstrap.sh              fetch upstream at pinned commits, apply patches
-├── build.sh                  driver: DMG → app tree → .deb
+├── build.sh                  stable 5.5.2 driver
+├── build-latest-candidate.sh versioned 5.8.4 candidate driver
 ├── install-user.sh           rootless install into ~/.local
 ├── verify-real-desktop.sh    launch on the real display, capture evidence
 ├── patches/
-│   └── deb-tool.patch        our 6-file packaging correction
+│   ├── deb-tool.patch        packaging and URI registration corrections
+│   └── port-tool-*.patch     Linux compatibility fixes for the converter
+├── tools/
+│   ├── workbuddy_intl_release_probe.py
+│   └── workbuddy_prepare_new_port.py
+├── BUILD_REPORT.md           this candidate's build and validation record
+├── INSTALL.md                package and user-level installation notes
+├── ROLLBACK.md               rollback instructions
 ├── docs/
+│   ├── PORTING-WORKFLOW.md   repeatable release update workflow
 │   ├── uri-scheme-bug.md     the silent login-callback failure
 │   ├── env-traps.md          host quirks that break the toolchain
 │   ├── UPSTREAM-NOTES.md     build/verification notes
